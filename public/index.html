@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Retry-Safe Policy API</title>
+<meta name="description" content="Live demo: an insurance policy API that issues at most one policy per booking under retries, races, crashes and stalls. Synthetic data.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: split screen. Left = process map replayed from recorded events; right = controls, live requests, raw log, database rows. */
+:root {
+  --bg: #f4f6f8; --panel: #ffffff; --ink: #17202a; --muted: #5b6776; --rule: #dde2e8; --sunk: #edf0f4;
+  --accent: #0f6b74; --accent-soft: #dff0f1;
+  --ok: #1d7a3c; --ok-bg: #e4f3e8; --warn: #9a5b00; --warn-bg: #fcefd8; --bad: #a3271f; --bad-bg: #fae5e2;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #10151b; --panel: #161d25; --ink: #e4e9ef; --muted: #98a4b2; --rule: #29323d; --sunk: #1d2630;
+  --accent: #5cc3cc; --accent-soft: #143439;
+  --ok: #6fd18f; --ok-bg: #15301f; --warn: #f0b85a; --warn-bg: #382810; --bad: #f08a80; --bad-bg: #3a1815;
+  color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+header { max-width: 1400px; margin: 0 auto 18px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: end; justify-content: space-between; }
+h1 { font: 700 clamp(1.6rem, 3vw, 2.1rem)/1.1 var(--display); margin: 0 0 6px; }
+header p { margin: 0; color: var(--muted); max-width: 70ch; }
+.tag { font: 12px var(--mono); color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 3px 10px; background: var(--panel); }
+.split { max-width: 1400px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 16px; min-width: 0; }
+.panel h2 { font: 600 13px var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+.sticky { position: sticky; top: calc(12px + env(safe-area-inset-top, 0px)); }
+.box { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; }
+.box b { display: block; font: 600 14px var(--body); }
+.box span { font-size: 12.5px; color: var(--muted); }
+.flowcol { display: grid; gap: 10px; }
+.arrow { font: 13px var(--mono); padding: 10px 12px; border-radius: 8px; background: var(--sunk); min-height: 3.2em; overflow-wrap: anywhere; }
+.arrow .who { color: var(--accent); font-weight: 500; }
+.chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 6px; }
+.chip { font: 12px var(--mono); text-align: center; padding: 6px 4px; border-radius: 6px; background: var(--sunk); color: var(--muted); border: 2px solid transparent; transition: border-color .15s; }
+.chip.active { border-color: var(--ink); }
+.p-owner { background: var(--accent-soft); color: var(--accent); }
+.p-created, .p-replayed { background: var(--ok-bg); color: var(--ok); }
+.p-told-wait, .p-stalled { background: var(--warn-bg); color: var(--warn); }
+.p-rejected, .p-fenced, .p-crashed { background: var(--bad-bg); color: var(--bad); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.legend .chip { font-size: 11px; padding: 2px 8px; }
+.dbcard { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.kv { background: var(--sunk); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.kv small { display: block; font: 11.5px var(--mono); color: var(--muted); }
+.kv strong { font: 500 14px var(--mono); overflow-wrap: anywhere; }
+.st-processing { color: var(--warn); } .st-completed { color: var(--ok); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+button, select { font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.counter { font: 12.5px var(--mono); color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.scenario { display: grid; gap: 8px; margin-bottom: 14px; }
+.scenario p { margin: 0; color: var(--muted); font-size: 14px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row select { flex: 1 1 220px; }
+.status { font: 13px var(--mono); color: var(--muted); min-height: 1.4em; }
+.tbl { overflow-x: auto; margin-bottom: 14px; max-height: 320px; overflow-y: auto; border: 1px solid var(--rule); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font: 12.5px var(--mono); font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 500; }
+tr.cur td { background: var(--accent-soft); }
+tr.clk { cursor: pointer; }
+.code { display: inline-block; padding: 1px 7px; border-radius: 999px; font-weight: 500; }
+.c2 { background: var(--ok-bg); color: var(--ok); } .c4 { background: var(--warn-bg); color: var(--warn); } .c4x { background: var(--bad-bg); color: var(--bad); } .cx { background: var(--bad-bg); color: var(--bad); }
+h3 { font: 600 13px var(--body); margin: 4px 0 6px; }
+.empty { color: var(--muted); font-size: 14px; padding: 10px 0; }
+footer { max-width: 1400px; margin: 18px auto 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 900px) { .split { grid-template-columns: minmax(0, 1fr); } .sticky { position: static; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Retry-safe policy API</h1>
+    <p>A partner calls <code>POST /api/policies</code> to insure a booking. Pick a failure, run it against the live API, and watch the left side replay what the server actually recorded.</p>
+  </div>
+  <span class="tag">Synthetic data · demo lease 3s</span>
+</header>
+
+<div class="split">
+  <section class="panel sticky" aria-labelledby="map-h">
+    <h2 id="map-h">Process map (replayed from recorded events)</h2>
+    <div class="flowcol">
+      <div class="box"><b>Partner</b><span>Booking app sending requests (one chip per request)</span></div>
+      <div class="chips" id="chips"><span class="empty">Run a scenario to see requests here.</span></div>
+      <div class="arrow" id="arrow" aria-live="polite">Waiting for a run.</div>
+      <div class="box"><b>Database: idempotency row</b><span id="dbkey">no key yet</span></div>
+      <div class="dbcard" id="dbcard"></div>
+    </div>
+    <div class="legend" aria-label="Legend">
+      <span class="chip p-owner">owns key</span><span class="chip p-told-wait">told to wait</span><span class="chip p-created">created / replayed</span><span class="chip p-rejected">rejected / fenced / crashed</span>
+    </div>
+    <div class="controls">
+      <button type="button" id="play" disabled>Play</button>
+      <button type="button" id="step" disabled>Step</button>
+      <button type="button" id="reset" disabled>Restart</button>
+      <label for="speed" style="font-size:13px;color:var(--muted)">Speed</label>
+      <select id="speed"><option value="900">Slow</option><option value="450" selected>Normal</option><option value="150">Fast</option></select>
+      <span class="counter" id="counter">0 / 0 events</span>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="api-h">
+    <h2 id="api-h">Live API</h2>
+    <div class="scenario">
+      <div class="row">
+        <label for="scenario" style="position:absolute;left:-9999px">Scenario</label>
+        <select id="scenario"></select>
+        <button type="button" class="primary" id="run">Run against live API</button>
+      </div>
+      <p id="desc"></p>
+      <div class="status" id="status" aria-live="polite"></div>
+    </div>
+
+    <h3>Requests sent</h3>
+    <div class="tbl"><table><thead><tr><th>Request</th><th>Note</th><th>HTTP</th><th>Policy</th><th>ms</th></tr></thead><tbody id="reqs"><tr><td colspan="5" class="empty">No requests yet.</td></tr></tbody></table></div>
+
+    <h3>Event log (raw, from the server; click a row to jump the map)</h3>
+    <div class="tbl"><table><thead><tr><th>#</th><th>+ms</th><th>Request</th><th>Event</th><th>Detail</th></tr></thead><tbody id="events"><tr><td colspan="5" class="empty">No events yet.</td></tr></tbody></table></div>
+
+    <h3>Database rows now</h3>
+    <div class="tbl"><table><thead><tr><th>Key (partner + booking)</th><th>Status</th><th>Owner token</th><th>Lease until</th><th>Stored HTTP</th></tr></thead><tbody id="keys"><tr><td colspan="5" class="empty">—</td></tr></tbody></table></div>
+    <div class="tbl"><table><thead><tr><th>Policy</th><th>Booking</th><th>Premium</th><th>Created</th></tr></thead><tbody id="policies"><tr><td colspan="4" class="empty">—</td></tr></tbody></table></div>
+  </section>
+</div>
+<footer>All partners, bookings and users are synthetic. Each run uses a fresh booking. Source: idempotent-policy-api (private).</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>
