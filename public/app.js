@@ -18,7 +18,7 @@ const SCENARIOS = {
   },
   burst: {
     label: '20 simultaneous requests',
-    desc: '20 identical requests fired at once. Exactly one should win the claim; the rest get 409 or the replayed 200.',
+    desc: '20 identical requests fired at once (browsers send them in waves of a few connections, so the first wave genuinely overlaps). Exactly one should win the claim; the rest get 409 or the replayed 200.',
     run: (ctx) => Promise.all(Array.from({ length: 20 }, (_, i) => ctx.send(`r${i + 1}`))),
   },
   body: {
@@ -28,7 +28,7 @@ const SCENARIOS = {
   },
   crash: {
     label: 'Server crashes mid-request',
-    desc: 'r1 claims the key and its connection drops. r2 retries at once (lease still running → 409). r3 retries after the lease expires and takes over.',
+    desc: 'r1 claims the key and its connection drops; the hosting platform reports that to the client as a 500, as a load balancer would for a dead server. r2 retries at once (lease still running → 409). r3 retries after the lease expires and takes over.',
     run: async (ctx) => {
       await ctx.send('r1', {}, '?simulate=crash', 'crash after claim');
       await ctx.send('r2', {}, '', 'immediate retry');
