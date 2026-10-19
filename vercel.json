@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/policies.ts": { "maxDuration": 15 }
+  }
+}

@@ -1,0 +1,4 @@
+test/
+.pgdata/
+.env
+.env.*
